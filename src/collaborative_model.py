@@ -30,6 +30,62 @@ def recommend_products(user_id, user_item_matrix, similarity_df, df_original, to
     if user_id not in user_item_matrix.index:
         return pd.DataFrame({"Message": [f"Customer {user_id} not found."]})
 
+    # Extract similarity vector and ensure alignment with user_item_matrix.index
+    sim_vec = similarity_df.loc[user_id]
+    if not sim_vec.index.equals(user_item_matrix.index):
+        sim_vec = sim_vec.reindex(user_item_matrix.index, fill_value=0)
+
+    # Remove the user's own similarity score (set to 0 to avoid self-influence)
+    if user_id in sim_vec.index:
+        sim_vec.loc[user_id] = 0
+
+    # Compute denominator (sum of similarities)
+    denom = sim_vec.sum()
+    if denom == 0:
+        return pd.DataFrame({"Message": [f"No similar users found for {user_id}."]})
+
+    # Compute weighted scores
+    try:
+        weighted_scores = user_item_matrix.T.dot(sim_vec) / denom
+    except ValueError as e:
+        return pd.DataFrame({"Message": [f"Matrix alignment error for {user_id}: {str(e)}"]})
+
+    # Exclude items the user has already purchased
+    user_row = user_item_matrix.loc[user_id]
+    already = user_row[user_row > 0].index
+    weighted_scores = weighted_scores.drop(index=already, errors="ignore")
+
+    if weighted_scores.empty:
+        return pd.DataFrame({"Message": [f"No unseen items to recommend for {user_id}."]})
+
+    # Get product metadata
+    meta = (
+        _normalize_ids(df_original)
+        .drop_duplicates(subset=["StockCode"])[["StockCode", "Description"]]
+        .set_index("StockCode")
+    )
+
+    # Build recommendations DataFrame
+    recs = (
+        pd.DataFrame(
+            {"StockCode": weighted_scores.index, "Estimated Score": weighted_scores.values}
+        )
+        .join(meta, on="StockCode")
+        .sort_values("Estimated Score", ascending=False)
+        .head(top_n)
+        .reset_index(drop=True)
+    )
+    if "Description" not in recs.columns:
+        recs["Description"] = "N/A"
+
+    return recs[["StockCode", "Description", "Estimated Score"]]    
+
+def recommend_products22(user_id, user_item_matrix, similarity_df, df_original, top_n: int = 10):
+    user_id = str(user_id).replace(".0", "")
+
+    if user_id not in user_item_matrix.index:
+        return pd.DataFrame({"Message": [f"Customer {user_id} not found."]})
+
     sim_vec = similarity_df.loc[user_id].reindex(user_item_matrix.index).fillna(0)
 
     if user_id in sim_vec.index:
